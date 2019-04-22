@@ -38,6 +38,7 @@ MANIFEST
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
+nohup.out
 
 # Unit test / coverage reports
 htmlcov/
@@ -94,6 +95,8 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+.idea/
+cmake-build-debug/
 
 # Spyder project settings
 .spyderproject
@@ -107,3 +110,8 @@ venv.bak/
 
 # mypy
 .mypy_cache/
+
+# logs
+honeybot/log/*
+# visual studio code settings
+.vscode/

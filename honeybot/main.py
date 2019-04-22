@@ -3,40 +3,37 @@
 
 import configparser
 import importlib
+import logging
 import socket
+import sys
 
-config = configparser.ConfigParser()
-config.read('CONNECT.conf')
+connect_config = configparser.ConfigParser()
+connect_config.read('settings/CONNECT.conf')
 plugins = []
+
+logger = logging.getLogger('bot_core')
 
 
 class Bot_core(object):
-    def __init__(self,
-                 server_url=config['INFO']['server_url'],
-                 port=int(config['INFO']['port']),
-                 name=config['INFO']['name'],
-                 owners=['appinventorMu', 'appinv'],
-                 password='',
-                 friends=['haruno', 'keiserr', 'loganaden'],
-                 autojoin_channels=['##bottestingmu', '#bottest']
-                 ):
-        self.server_url = server_url
-        self.port = port
-        self.name = name
-        self.owners = owners
-        self.password = password
-        self.autojoin_channels = autojoin_channels
-        self.friends = friends
+    def __init__(self, password=''):
 
-        '''
-        NORMAL ATTRIBUTES
-        '''
+        self.server_url = connect_config['INFO']['server_url']
+        self.port = int(connect_config['INFO']['port'])
+        self.name = connect_config['INFO']['name']
+        self.owners = self.configfile_to_list('OWNERS')
+        self.password = password
+        self.friends = self.configfile_to_list('FRIENDS')
+        self.autojoin_channels = self.configfile_to_list('AUTOJOIN_CHANNELS')
+        self.required_modules = self.requirements()
+
         self.irc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.isListenOn = 1
         dom = self.server_url.split('.')
         self.domain = '.'.join(dom[-2:])
         self.sp_command = 'hbot'
         self.plugins = []
+
+        
 
     '''
     STRINGS
@@ -57,11 +54,11 @@ class Bot_core(object):
     def specific_send_command(self, target, msg):
         return "PRIVMSG " + target + " :" + msg + "\r\n"
 
-    def pong_return(self):
-        return 'PONG \r\n'
+    def pong_return(self, domain):
+        return 'PONG :{}\r\n'.format(domain)
 
     def info(self, s):
-        def return_it(x):
+        def prevent_none(x):
             if x is None:
                 return ''
             else:
@@ -71,7 +68,7 @@ class Bot_core(object):
             trailing = []
             address = ''
             if not s:
-                print("Empty line.")
+                pass
             if s[0] == ':':
                 prefix, s = s[1:].split(' ', 1)
             if s.find(' :') != -1:
@@ -87,13 +84,16 @@ class Bot_core(object):
                 address = prefix.split('!~')[0]
             # return prefix, command, args, address
             return {
-                    'prefix': return_it(prefix),
-                    'command': return_it(command),
+                    'prefix': prevent_none(prefix),
+                    'command': prevent_none(command),
                     'args': ['' if e is None else e for e in args],
-                    'address': return_it(address)
+                    'address': prevent_none(address),
+                    'bot_name': prevent_none(self.name),
+                    'bot_special_command': self.sp_command,
+                    'required_modules': self.required_modules
                     }
         except Exception as e:
-            print('woops', e)
+            logger.error(e)
 
     '''
     MESSAGE UTIL
@@ -111,19 +111,32 @@ class Bot_core(object):
     BOT UTIL
     '''
 
-    def load_plugins(self, list_to_add):
-        try:
-            to_load = []
-            with open('PLUGINS.conf', 'r') as f:
-                to_load = f.read().split('\n')
-                to_load = list(filter(lambda x: x != '', to_load))
-            for file in to_load:
+    def load_plugins(self, plugins_to_load):
+        list_to_add = self.plugins
+        logger.info('Loading plugins...')
+
+        to_load = []
+        plugs = 'settings/{}.conf'.format(plugins_to_load)
+        with open(plugs) as f:
+            to_load = f.read().split('\n')
+            to_load = list(filter(lambda x: x != '', to_load))
+        for file in to_load:
+            try:
                 module = importlib.import_module('plugins.'+file)
-                Plugin = getattr(module, 'Plugin')
-                obj = Plugin()
-                list_to_add.append(obj)
-        except ModuleNotFoundError as e:
-            print('module not found', e)
+            except ModuleNotFoundError as e:
+                logger.warning(f"module import error, skipped' {e} in {file}")
+            obj = module.Plugin
+            list_to_add.append(obj)
+
+        self.plugins = list_to_add
+        logger.info('Loaded plugins...')
+
+    def configfile_to_list(self, filename):
+        elements = []
+        with open('settings/{}.conf'.format(filename)) as f:
+            elements = f.read().split('\n')
+            elements = list(filter(lambda x: x != '', elements))
+        return elements
 
     def methods(self):
         return {
@@ -136,9 +149,19 @@ class Bot_core(object):
         '''
         incoming is the unparsed string. refer to test.py
         '''
-        for plugin in listfrom:
-            plugin.run(incoming, self.methods(), self.info(incoming))
+        #if self.info(incoming)['args'][1][0] == ".":
+            #print("\033[0;32mReceived!\033[0;0m")
 
+        for plugin in listfrom:
+            #print(f"\033[0;33mTrying {plugin}\033[0;0m")
+            plugin.run(self, incoming, self.methods(), self.info(incoming))
+
+    def requirements(self):
+        reqs = []
+        with open('../requirements.txt') as f:
+            reqs = f.read().split('\n')
+        reqs = [m.split('==')[0] for m in reqs if m]
+        return reqs
     '''
     MESSAGE PARSING
     '''
@@ -147,6 +170,7 @@ class Bot_core(object):
         '''
         PLUGINS
         '''
+
         self.run_plugins(self.plugins, incoming)
 
     '''
@@ -172,48 +196,59 @@ class Bot_core(object):
                 msg = raw_msg.strip('\n\r')
                 self.stay_alive(msg)
                 self.core_commands_parse(msg)
-                print(
-                """***
-{}
-                   """.format(msg))
+                logger.info(msg)
+
                 if len(data) == 0:
                     try:
-                        print('<must handle reconnection>')
+                        logger.critical(f'<must handle reconnection - {len(data)}==0>')
+                        sys.exit()
                     except Exception as e:
-                        print(e)
+                        logger.info(e)
             except Exception as e:
-                print(e)
+                logger.info(e)
+
 
     # all in one for registered bot
     def registered_run(self):
         self.connect()
         self.identify()
         self.greet()
-        self.load_plugins(self.plugins)
+        self.load_plugins('PLUGINS')
         self.pull()
 
     def unregistered_run(self):
         self.connect()
         self.greet()
-        self.load_plugins(plugins)
+        self.load_plugins('PLUGINS')
         self.pull()
 
     '''
     ONGOING REQUIREMENT/S
     '''
     def stay_alive(self, incoming):
-        if 'ping' in incoming.lower():
-            part = incoming.split(':')
-            if self.domain in part[1]:
-                self.send(self.pong_return())
-                print('''
-                      ***** message *****
-                      ping detected from
-                      {}
-                      *******************
-                      '''.format(part[1]))
-                self.irc.recv(2048).decode("UTF-8")
+        if not incoming:
+            logger.critical('<must handle reconnection - incoming is not True>')
+            sys.exit()
+        parts = incoming.split(':')
+        if parts[0].strip().lower() == 'ping':
+            # if self.domain in parts[1]:
+            logger.warning(parts[1])
+            self.send(self.pong_return(self.domain))
+            self.send(self.pong_return(parts[1]))
+            self.irc.recv(2048).decode("UTF-8")
 
 if __name__ == '__main__':
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s %(name)s %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S',
+    )
+
+    # logger.debug("debug message")
+    # logger.info("info message")
+    # logger.warning("warn message")
+    # logger.error("error message")
+    # logger.critical("critical message")
+
     x = Bot_core()
-    x.registered_run()
+    x.unregistered_run()
